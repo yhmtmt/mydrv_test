@@ -36,15 +36,8 @@ void * rx_thread(void * ptr){
   return NULL;
 }
 
-int main(int argc, char ** argv){
-  int fd;
- 
-  fd = open("/dev/zdmai0", O_RDWR);
-  if(argc < 2){
-    printf("zdmai_test <operation> [<hex value>]\n");
-    return 0;
-  }
-if(strcmp(argv[1], "dma") == 0){
+void proc_dma(int argc, char ** argv, int fd)
+{
     pthread_t tx, rx;
     struct thdata txd;
     struct thdata rxd;
@@ -53,7 +46,7 @@ if(strcmp(argv[1], "dma") == 0){
     struct timeval s, f;
     if(argc != 3){
       printf("dma <bytes to transfer>\n");
-      return 0;
+      return;
     }
     size_transfer = (unsigned int) atoi(argv[2]);
 
@@ -109,13 +102,15 @@ if(strcmp(argv[1], "dma") == 0){
     }
     free(tx_buf_);
     free(rx_buf_);
+}
 
-  }else if(strcmp(argv[1], "dmaw") == 0){
-    struct thdata txd;
+void proc_dmaw(int argc, char ** argv, int fd)
+{
+   struct thdata txd;
     int i;
     if(argc != 3){
       printf("dma <bytes to transfer>\n");
-      return 0;
+      return;
     }
     size_transfer = (unsigned int) atoi(argv[2]);
     
@@ -130,7 +125,7 @@ if(strcmp(argv[1], "dma") == 0){
 	   (unsigned long) tx_buf_, (unsigned long) txd.buf);
 
     for(i = 0; i < size_transfer; i++){
-      txd.buf[i] = rand();
+      txd.buf[i] = i;
     }
     
     printf("fd=%d size_transfer=%d\n", fd, sizeof(int) * size_transfer);
@@ -143,55 +138,203 @@ if(strcmp(argv[1], "dma") == 0){
       printf("%08x ", txd.buf[i]);
     }
     */
-    for(i = 0; i < sz; i++){
+    /*
+    for(i = 0; i < txd.res; i++){
       printf("[%d]%02x ", i, tx_buf_[i]);
     }
-
-    if(i != size_transfer){
+    */
+    if(txd.res !=  sizeof(int) * size_transfer){
       printf("transfer failed.\n");
     }else{
       printf("trasfer successfully completed.\n");
     }
     free(tx_buf_);
+}
+
+void proc_dmar(int argc, char ** argv, int fd)
+{
+  struct thdata rxd;
+  int i;
+  if(argc != 3){
+    printf("dma <bytes to transfer>\n");
+    return;
+  }
+  size_transfer = (unsigned int) atoi(argv[2]);
+
+  srand(size_transfer);
+  size_t sz = sizeof(int) * size_transfer + DATA_SIZE;
+  unsigned char * rx_buf_ = (unsigned char*) 
+    malloc(sizeof(int) * size_transfer + DATA_SIZE);
+  rxd.buf = (int*)(((unsigned long) (rx_buf_ + DATA_SIZE) >> DATA_ALIGN) << DATA_ALIGN);
+  printf("pbuf_=%08x size=%d pbuf_off=%08x\n",
+	 (unsigned long) rx_buf_, sz, (unsigned long) rxd.buf);
+  
+  rxd.fd = fd;
+  
+  for(i = 0; i < size_transfer; i++){
+    rxd.buf[i] = 0;
+  }
+  
+  for(i = 0; i < sz; i++){
+    printf("[%d]%02x ", i, rx_buf_[i]);
+  }
+  printf("\n");
+  
+  printf("fd=%d size_transfer=%d\n", fd, sizeof(int) * size_transfer);
+  printf("Read start.\n");
+  rxd.res =  read(rxd.fd, rxd.buf, sizeof(int) * size_transfer);
+  printf("Read done. %d bytes\n", rxd.res);
+  
+  for(i = 0; i < sz; i++){
+    printf("[%d]%02x ", i, rx_buf_[i]);
+  }
+  printf("\n");
+  
+  free(rx_buf_);
+}
+
+void imdmaw(int argc, char ** argv, int fd)
+{
+  int hsize, vsize, psize, dscsize;
+  int num_trans;
+  int last;
+  int tot_size;
+  int res;
+  int i;
+  unsigned char * buf;
+
+  if(argc != 6){
+    printf("imdmaw <hsize> <vsize> <psize> <dscsize>\n");
+    return;
+  }
+
+  hsize = atoi(argv[2]);
+  vsize = atoi(argv[3]);
+  psize = atoi(argv[4]);
+  dscsize = atoi(argv[5]);
+
+  tot_size = hsize * vsize * psize;
+  num_trans = tot_size / dscsize;
+  last = tot_size % dscsize;
+  printf("%dx%d pixel %dbyte/pixel %d total bytes divided into %d write operation\n", hsize, vsize, psize, tot_size, num_trans + (last ? 1 : 0));
+
+  buf = NULL;
+  res = posix_memalign((void**)&buf, DATA_SIZE, dscsize);
+
+  if(res != 0){
+    printf("Failed to allocate buffer.\n");
+    return;
+  }
+
+  // preparing data
+  for(i = 0; i < dscsize; i++){
+    buf[i] = (unsigned char)(i % 0xFF);
+  }
+
+  for(i = 0; i < num_trans; i++){
+    printf("%d th write operation ... ", i);
+    res = write(fd, buf, dscsize);
+    printf(" done. %d bytes transfered.\n", res);
+    if(res <= 0){
+      printf("Failed to transfer data. ret = %d\n", res);
+      return;
+    }
+  }
+
+  if(last){
+    printf("last write operation ... ");
+    res = write(fd, buf, last);
+    printf(" done. %d bytes transfered.\n", res);
+    if(res <= 0){
+      printf("Failed to transfer data. ret = %d\n", res);
+      return;
+    }
+  }
+}
+
+void imdmar(int argc, char ** argv, int fd)
+{
+  int hsize, vsize, psize, dscsize;
+  int num_trans;
+  int last;
+  int tot_size;
+  int res;
+  int i, j;
+  unsigned char * buf;
+
+  if(argc != 6){
+    printf("imdmar <hsize> <vsize> <psize> <dscsize>\n");
+    return;
+  }
+  hsize = atoi(argv[2]);
+  vsize = atoi(argv[3]);
+  psize = atoi(argv[4]);
+  dscsize = atoi(argv[5]);
+
+  tot_size = hsize * vsize * psize;
+  num_trans = tot_size / dscsize;
+  last = tot_size % dscsize;
+  printf("%d x %d pixel %d byte/pixel %d total bytes divided into %d read operation\n", hsize, vsize, psize, tot_size, num_trans + (last ? 1 : 0));
+  buf = NULL;
+  res = posix_memalign((void**)&buf, DATA_SIZE, dscsize);
+
+  if(res != 0){
+    printf("Failed to allocate buffer.\n");
+    return;
+  }
+
+  for(i = 0; i < num_trans; i++){
+    printf("%d th read operation ... ", i);
+    res = read(fd, buf, dscsize);
+    printf(" done. %d bytes transfered.\n", res);
+    if(res <= 0){
+      printf("Failed to receive data. ret=%d \n", res);
+      return;
+    }
+    for(j = 0; j < dscsize; j++){
+      if(buf[j] != (unsigned char)(j % 0xFF)){
+	printf("In transfer %d, %dth byte, error happened. %02x != %02x\n",
+	       i, j, buf[j], (unsigned char)(j % 0xFF));
+      }
+    }
+  }
+
+  if(last){
+    printf("last th read operation ... ");
+    res = read(fd, buf, last);
+    printf(" done. %d bytes transfered.\n", res);
+    if(res <= 0){
+      printf("Failed to receive data. ret=%d \n", res);
+      return;
+    }
+    for(j = 0; j < last; j++){
+      if(buf[j] != (unsigned char)(j % 0xFF)){
+	printf("In last transfer, %dth byte, error happened. %02x != %02x\n",
+	       j, buf[j], (unsigned char)(j % 0xFF));
+      }
+    }
+  }
+}
+
+
+int main(int argc, char ** argv){
+  int fd;
+ 
+  fd = open("/dev/zdmai0", O_RDWR);
+  if(argc < 2){
+    printf("zdmai_test <operation> [<hex value>]\n");
+    return 0;
+  }
+  if(strcmp(argv[1], "dma") == 0){
+    proc_dma(argc, argv, fd);
+  }else if(strcmp(argv[1], "dmaw") == 0){
+    proc_dmaw(argc, argv, fd);
   }else if(strcmp(argv[1], "dmar") == 0){
-    struct thdata rxd;
-    int i;
-    if(argc != 3){
-      printf("dma <bytes to transfer>\n");
-      return 0;
-    }
-    size_transfer = (unsigned int) atoi(argv[2]);
-
-    srand(size_transfer);
-    size_t sz = sizeof(int) * size_transfer + DATA_SIZE;
-    unsigned char * rx_buf_ = (unsigned char*) 
-      malloc(sizeof(int) * size_transfer + DATA_SIZE);
-    rxd.buf = (int*)(((unsigned long) (rx_buf_ + DATA_SIZE) >> DATA_ALIGN) << DATA_ALIGN);
-    printf("pbuf_=%08x size=%d pbuf_off=%08x\n",
-	   (unsigned long) rx_buf_, sz, (unsigned long) rxd.buf);
-
-    rxd.fd = fd;
-
-    for(i = 0; i < size_transfer; i++){
-      rxd.buf[i] = 0;
-    }
-
-    for(i = 0; i < sz; i++){
-      printf("[%d]%02x ", i, rx_buf_[i]);
-    }
-    printf("\n");
-
-    printf("fd=%d size_transfer=%d\n", fd, sizeof(int) * size_transfer);
-    printf("Read start.\n");
-    rxd.res =  read(rxd.fd, rxd.buf, sizeof(int) * size_transfer);
-    printf("Read done. %d bytes\n", rxd.res);
-
-    for(i = 0; i < sz; i++){
-      printf("[%d]%02x ", i, rx_buf_[i]);
-    }
-    printf("\n");
-
-    free(rx_buf_);
+    proc_dmar(argc, argv, fd);
+  }else if(strcmp(argv[1], "imdmar") == 0){
+    imdmar(argc,argv, fd);
+  }else if(strcmp(argv[1], "imdmaw") == 0){
+    imdmaw(argc, argv, fd);
   }else{
     printf("Error: unknown operation %s.", argv[2]);
     return 1;
