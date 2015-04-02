@@ -1,4 +1,6 @@
-include $(PETALINUX)/software/petalinux-dist/tools/user-commons.mk
+
+#include $(PETALINUX)/software/petalinux-dist/tools/user-commons.mk
+CC=$(CROSS_COMPILE)gcc
 
 mydrv_test: mydrv_test.c
 	$(CC) $(CFLAGS) $(LDFLAGS) -lpthread mydrv_test.c -o mydrv_test
